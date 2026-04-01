@@ -360,13 +360,12 @@ def send_change_host(transport, devnumber, feat_idx, target_host):
     transport.write(msg)
 
 
-def get_current_host(transport, devnumber, feat_idx):
-    """Query CHANGE_HOST getHostInfo (fn 0). Returns current host (0-based) or None."""
+def get_host_info(transport, devnumber, feat_idx):
+    """Query CHANGE_HOST getHostInfo (fn 0). Returns (num_hosts, current_host) or (None, None)."""
     reply = hidpp_request(transport, devnumber, (feat_idx << 8) | 0x00, timeout=500)
     if reply and len(reply) >= 2:
-        # reply[0] = numHosts, reply[1] = currentHost
-        return reply[1]
-    return None
+        return reply[0], reply[1]
+    return None, None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -463,6 +462,39 @@ _PING_MSG = struct.pack("!BB18s", REPORT_LONG, DEVNUMBER_DIRECT,
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+def _do_switch_mouse(mouse: DeviceInfo, total_switches: int, target_host: int) -> tuple[DeviceInfo, int]:
+    """Send CHANGE_HOST to mouse, reconnecting if needed. Returns (mouse, total_switches)."""
+    if mouse.transport._dev is None:
+        log.debug("Mouse transport stale, reconnecting...")
+        new_mouse = find_device(DEVICE_TYPE_MOUSE)
+        if new_mouse:
+            mouse = new_mouse
+        else:
+            log.info(_("Myš zatím nedostupná — přepne se při dalším Easy-Switch"))
+            return mouse, total_switches
+    try:
+        send_change_host(mouse.transport, DEVNUMBER_DIRECT, mouse.change_host_idx, target_host)
+        log.info(_("★ CHANGE_HOST → %s → EZ%d"), mouse.name, target_host + 1)
+        total_switches += 1
+    except (TransportError, OSError):
+        log.warning(_("CHANGE_HOST na myš selhal, zkouším reconnect myši..."))
+        mouse.close()
+        time.sleep(1.0)  # let BT stack settle
+        new_mouse = find_device(DEVICE_TYPE_MOUSE)
+        if new_mouse:
+            mouse = new_mouse
+            try:
+                send_change_host(mouse.transport, DEVNUMBER_DIRECT, mouse.change_host_idx, target_host)
+                log.info(_("★ CHANGE_HOST → %s → EZ%d (po reconnectu)"), mouse.name, target_host + 1)
+                total_switches += 1
+            except (TransportError, OSError) as e:
+                log.warning(_("CHANGE_HOST retry selhal: %s — myš se přepne příště"), e)
+        else:
+            log.info(_("Myš zatím nedostupná — přepne se při dalším Easy-Switch"))
+    return mouse, total_switches
+
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=_("SwiGi — synchronizace Easy-Switch přes Bluetooth"))
@@ -477,18 +509,26 @@ def main():
 
     log.info(_("SwiGi — hledám zařízení..."))
 
-    kb = find_device(DEVICE_TYPE_KEYBOARD)
-    if kb is None:
-        log.error(_("Klávesnice nenalezena! Zkontroluj BT připojení."))
-        return 1
+    kb = None
+    while kb is None:
+        kb = find_device(DEVICE_TYPE_KEYBOARD)
+        if kb is None:
+            log.info(_("Klávesnice nenalezena, čekám..."))
+            time.sleep(2.0)
     log.info(_("Klávesnice: %s (CHANGE_HOST idx=%d)"), kb.name, kb.change_host_idx)
 
-    mouse = find_device(DEVICE_TYPE_MOUSE)
-    if mouse is None:
-        log.error(_("Myš nenalezena! Zkontroluj BT připojení."))
-        kb.close()
-        return 1
+    mouse = None
+    while mouse is None:
+        mouse = find_device(DEVICE_TYPE_MOUSE)
+        if mouse is None:
+            log.info(_("Myš nenalezena, čekám..."))
+            time.sleep(2.0)
     log.info(_("Myš:        %s (CHANGE_HOST idx=%d)"), mouse.name, mouse.change_host_idx)
+
+    num_hosts, this_kb_host = get_host_info(kb.transport, DEVNUMBER_DIRECT, kb.change_host_idx)
+    num_hosts = num_hosts or 2
+    this_kb_host = this_kb_host or 0
+    log.info(_("Host tohoto PC: EZ%d (celkem %d hostů)"), this_kb_host + 1, num_hosts)
 
     log.info("")
     log.info(_("Připraveno. Stiskni Easy-Switch na %s."), kb.name)
@@ -503,8 +543,11 @@ def main():
     signal.signal(signal.SIGINT, on_sigint)
 
     total_switches = 0
+    switch_done = False       # True if mouse already switched via HID++ notification
     last_response = time.time()  # watchdog: last time we got any HID++ response
-    WATCHDOG_TIMEOUT = 10.0      # force reconnect after this many seconds without response
+    last_ping = time.time() - 1.0  # fire first ping immediately
+    WATCHDOG_TIMEOUT = 10.0  # force reconnect after this many seconds without response
+    PING_INTERVAL = 1.0      # liveness ping interval (seconds)
 
     while running:
         # ── Watchdog: force reconnect if no response for too long ──
@@ -520,12 +563,39 @@ def main():
             last_response = time.time()  # reset timer regardless
             continue
 
-        # ── Send ping ──
-        try:
-            kb.transport.write(_PING_MSG)
-        except (TransportError, OSError):
+        # ── Periodic ping (liveness) ──
+        kb_lost = False
+        if time.time() - last_ping >= PING_INTERVAL:
+            try:
+                kb.transport.write(_PING_MSG)
+                last_ping = time.time()
+            except (TransportError, OSError):
+                kb_lost = True
+
+        # ── Blocking read — we spend almost all our time here ──
+        # hid_read_timeout returns as soon as a report arrives, so we catch
+        # the CHANGE_HOST notification while the keyboard is still connected.
+        if not kb_lost:
+            try:
+                raw = kb.transport.read(timeout=100)
+            except (TransportError, OSError):
+                kb_lost = True
+                raw = None
+
+        # ── Keyboard disconnect handling ──
+        if kb_lost:
+            if not switch_done:
+                # No HID++ notification was received — keyboard switched silently.
+                # Switch mouse to the next host now while it's still reachable.
+                # Toggle between slot 0 and slot 1 (the two active pairing slots);
+                # simple % num_hosts breaks on 3-slot devices used in 2-machine setups.
+                other_host = 0 if this_kb_host != 0 else 1
+                log.info(_("Klávesnice se odpojila, přepínám myš na EZ%d..."), other_host + 1)
+                mouse, total_switches = _do_switch_mouse(mouse, total_switches, other_host)
+            switch_done = False
             log.info(_("Klávesnice se odpojila, čekám na návrat..."))
             kb.close()
+            mouse.close()  # transport is stale after switch
 
             # Reconnect loop
             kb_new = None
@@ -546,80 +616,41 @@ def main():
             kb = kb_new
             log.info(_("Klávesnice reconnect: %s"), kb.name)
             last_response = time.time()  # reset watchdog
+            last_ping = time.time()  # wait full interval before first ping (let BT settle)
+            time.sleep(0.5)           # give BT connection time to stabilize
 
-            # Just close stale mouse transport — reconnect at next event
-            mouse.close()
-            log.debug(_("Starý mouse transport zavřen, reconnect při dalším eventu"))
-
+            # Keyboard is back on this PC — try to bring mouse back too.
+            # _do_switch_mouse will find the mouse if it has reconnected to this PC
+            # (e.g. via Mac-side SwiGi or manual EZ1 press on the mouse).
+            log.info(_("Klávesnice reconnect: přepínám myš zpět na EZ%d..."), this_kb_host + 1)
+            mouse, total_switches = _do_switch_mouse(mouse, total_switches, this_kb_host)
             continue
 
-        # ── Read responses (200ms window) ──
-        deadline = time.time() + 0.08
-        while time.time() < deadline and running:
-            try:
-                raw = kb.transport.read(timeout=25)
-            except (TransportError, OSError):
-                break
+        if raw is None:
+            continue
+        if len(raw) < 4:
+            continue
+        rid = raw[0]
+        if rid not in _MSG_LENGTHS or len(raw) != _MSG_LENGTHS[rid]:
+            continue
 
-            if raw is None:
-                continue
-            if len(raw) < 4:
-                continue
-            rid = raw[0]
-            if rid not in _MSG_LENGTHS or len(raw) != _MSG_LENGTHS[rid]:
-                continue
+        feat = raw[2]
+        func = raw[3]
+        sw_id = func & 0x0F
+        last_response = time.time()  # watchdog: got valid response
 
-            feat = raw[2]
-            func = raw[3]
-            sw_id = func & 0x0F
-            last_response = time.time()  # watchdog: got valid response
+        # CHANGE_HOST notification: feat matches, sw_id == 0 (notification)
+        # (received on some devices; on direct-BT MX devices the disconnect fires first)
+        if feat == kb.change_host_idx and sw_id == 0 and len(raw) > 4:
+            target_host = raw[4]  # first payload byte = new host (0-based)
+            log.info("")
+            log.info(_("★ Easy-Switch: %s → EZ%d"), kb.name, target_host + 1)
+            mouse, total_switches = _do_switch_mouse(mouse, total_switches, target_host)
+            switch_done = True  # skip redundant switch when disconnect arrives
 
-            # CHANGE_HOST notification: feat matches, sw_id == 0 (notification)
-            if feat == kb.change_host_idx and sw_id == 0 and len(raw) > 5:
-                target_host = raw[5]
-                log.info("")
-                log.info(_("★ Easy-Switch: %s → host %d"), kb.name, target_host)
-
-                # Send CHANGE_HOST to mouse — reconnect if transport is stale
-                if mouse.transport._dev is None:
-                    log.debug("Mouse transport stale, reconnecting...")
-                    new_mouse = find_device(DEVICE_TYPE_MOUSE)
-                    if new_mouse:
-                        mouse = new_mouse
-                    else:
-                        log.info(_("Myš zatím nedostupná — přepne se při dalším Easy-Switch"))
-                        break
-
-                try:
-                    send_change_host(mouse.transport, DEVNUMBER_DIRECT,
-                                     mouse.change_host_idx, target_host)
-                    log.info(_("★ CHANGE_HOST → %s → host %d"), mouse.name, target_host)
-                    total_switches += 1
-                except (TransportError, OSError):
-                    log.warning(_("CHANGE_HOST na myš selhal, zkouším reconnect myši..."))
-                    mouse.close()
-                    time.sleep(1.0)  # let BT stack settle
-                    new_mouse = find_device(DEVICE_TYPE_MOUSE)
-                    if new_mouse:
-                        mouse = new_mouse
-                        try:
-                            send_change_host(mouse.transport, DEVNUMBER_DIRECT,
-                                             mouse.change_host_idx, target_host)
-                            log.info(_("★ CHANGE_HOST → %s → host %d (po reconnectu)"),
-                                     mouse.name, target_host)
-                            total_switches += 1
-                        except (TransportError, OSError) as e:
-                            log.warning(_("CHANGE_HOST retry selhal: %s — myš se přepne příště"), e)
-                    else:
-                        log.info(_("Myš zatím nedostupná — přepne se při dalším Easy-Switch"))
-
-                break  # keyboard will disconnect
-
-            # Log other notifications
-            if sw_id == 0:
-                log.debug("Notifikace: feat=0x%02X [%s]", feat, raw[:10].hex())
-
-        time.sleep(0.02)
+        # Log other notifications
+        elif sw_id == 0:
+            log.debug("Notifikace: feat=0x%02X [%s]", feat, raw[:10].hex())
 
     log.info(_("Ukončuji. Celkem %d přepnutí."), total_switches)
     kb.close()

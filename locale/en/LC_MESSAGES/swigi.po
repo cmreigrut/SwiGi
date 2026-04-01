@@ -32,6 +32,12 @@ msgstr "Verbose logging"
 msgid "SwiGi — hledám zařízení..."
 msgstr "SwiGi — searching for devices..."
 
+msgid "Klávesnice nenalezena, čekám..."
+msgstr "Keyboard not found, waiting..."
+
+msgid "Myš nenalezena, čekám..."
+msgstr "Mouse not found, waiting..."
+
 msgid "Klávesnice nenalezena! Zkontroluj BT připojení."
 msgstr "Keyboard not found! Check your Bluetooth connection."
 
@@ -58,6 +64,15 @@ msgid "Watchdog reconnect: %s"
 msgstr "Watchdog reconnect: %s"
 
 # Keyboard reconnect
+msgid "Host tohoto PC: EZ%d (celkem %d hostů)"
+msgstr "This PC's slot: EZ%d (of %d total)"
+
+msgid "Klávesnice se odpojila, přepínám myš na EZ%d..."
+msgstr "Keyboard disconnected — switching mouse to EZ%d..."
+
+msgid "Klávesnice reconnect: přepínám myš zpět na EZ%d..."
+msgstr "Keyboard reconnected — switching mouse back to EZ%d..."
+
 msgid "Klávesnice se odpojila, čekám na návrat..."
 msgstr "Keyboard disconnected, waiting for it to return..."
 
@@ -74,20 +89,20 @@ msgid "Starý mouse transport zavřen, reconnect při dalším eventu"
 msgstr "Stale mouse transport closed, will reconnect on next event"
 
 # Switch events
-msgid "★ Easy-Switch: %s → host %d"
-msgstr "★ Easy-Switch: %s → host %d"
+msgid "★ Easy-Switch: %s → EZ%d"
+msgstr "★ Easy-Switch: %s → EZ%d"
 
 msgid "Myš zatím nedostupná — přepne se při dalším Easy-Switch"
 msgstr "Mouse not yet available — will switch on next Easy-Switch press"
 
-msgid "★ CHANGE_HOST → %s → host %d"
-msgstr "★ CHANGE_HOST → %s → host %d"
+msgid "★ CHANGE_HOST → %s → EZ%d"
+msgstr "★ CHANGE_HOST → %s → EZ%d"
 
 msgid "CHANGE_HOST na myš selhal, zkouším reconnect myši..."
 msgstr "CHANGE_HOST to mouse failed, attempting mouse reconnect..."
 
-msgid "★ CHANGE_HOST → %s → host %d (po reconnectu)"
-msgstr "★ CHANGE_HOST → %s → host %d (after reconnect)"
+msgid "★ CHANGE_HOST → %s → EZ%d (po reconnectu)"
+msgstr "★ CHANGE_HOST → %s → EZ%d (after reconnect)"
 
 msgid "CHANGE_HOST retry selhal: %s — myš se přepne příště"
 msgstr "CHANGE_HOST retry failed: %s — mouse will switch next time"
