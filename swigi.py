@@ -452,6 +452,9 @@ def find_device(device_type_wanted: int) -> DeviceInfo | None:
 #  Ping message
 # ═══════════════════════════════════════════════════════════════════════════════
 
+REFRESH_INTERVAL = 1.0   # seconds between liveness pings to keyboard
+WATCHDOG_TIMEOUT = 10.0  # seconds without any response before forced reconnect
+
 _PING_REQUEST_ID = (FEATURE_ROOT << 8) | 0x00 | SW_ID
 _PING_MSG = struct.pack("!BB18s", REPORT_LONG, DEVNUMBER_DIRECT,
                         struct.pack("!H", _PING_REQUEST_ID) + b"\x00\x00\x00")
@@ -545,9 +548,7 @@ def main():
     total_switches = 0
     switch_done = False       # True if mouse already switched via HID++ notification
     last_response = time.time()  # watchdog: last time we got any HID++ response
-    last_ping = time.time() - 1.0  # fire first ping immediately
-    WATCHDOG_TIMEOUT = 10.0  # force reconnect after this many seconds without response
-    PING_INTERVAL = 1.0      # liveness ping interval (seconds)
+    last_ping = time.time() - REFRESH_INTERVAL  # fire first ping immediately
 
     while running:
         # ── Watchdog: force reconnect if no response for too long ──
@@ -565,7 +566,7 @@ def main():
 
         # ── Periodic ping (liveness) ──
         kb_lost = False
-        if time.time() - last_ping >= PING_INTERVAL:
+        if time.time() - last_ping >= REFRESH_INTERVAL:
             try:
                 kb.transport.write(_PING_MSG)
                 last_ping = time.time()

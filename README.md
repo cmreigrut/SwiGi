@@ -129,10 +129,10 @@ systemctl --user enable --now swigi
 
 ### How It Works
 
-1. Daemon periodically sends HID++ ping to keyboard (~250ms interval)
-2. Keyboard sends CHANGE_HOST notification when Easy-Switch is pressed
-3. Daemon catches it and sends the same command to the mouse
-4. Both switch to the same host
+1. Daemon periodically sends HID++ ping to keyboard (~1s interval)
+2. On devices that send a CHANGE_HOST notification before switching (e.g. MX Keys S over Bluetooth), the daemon catches it and immediately sends the same command to the mouse
+3. On devices that switch silently (e.g. MX Mechanical over direct Bluetooth), the daemon detects the keyboard disconnect and switches the mouse while it is still reachable on this PC
+4. Both devices end up on the same host
 
 Uses HID++ 2.0 protocol (CHANGE_HOST feature `0x1814`). Single Python file, no external dependencies besides hidapi.
 
@@ -142,6 +142,8 @@ Uses HID++ 2.0 protocol (CHANGE_HOST feature `0x1814`). Single Python file, no e
 |--------|-----|------------|
 | MX Keys S + MX Vertical | macOS (Sequoia) | Bluetooth |
 | MX Keys S + MX Vertical | Windows 11 | Bluetooth |
+| MX Mechanical + MX Master 3S | macOS (Sequoia) | Bluetooth |
+| MX Mechanical + MX Master 3S | Windows 11 | Bluetooth |
 
 Should work with any Logitech device combo that supports HID++ 2.0 and CHANGE_HOST.
 
@@ -267,10 +269,10 @@ systemctl --user enable --now swigi
 
 ### Jak to funguje
 
-1. Daemon periodicky posílá HID++ ping na klávesnici (každých ~250ms)
-2. Klávesnice při stisku Easy-Switch pošle CHANGE_HOST notifikaci
-3. Daemon ji zachytí a pošle stejný příkaz myši
-4. Oba se přepnou na stejný host
+1. Daemon periodicky posílá HID++ ping na klávesnici (každých ~1s)
+2. Na zařízeních, která před přepnutím pošlou CHANGE_HOST notifikaci (např. MX Keys S přes Bluetooth), daemon notifikaci zachytí a okamžitě pošle stejný příkaz myši
+3. Na zařízeních, která přepínají tiše (např. MX Mechanical přes přímý Bluetooth), daemon detekuje odpojení klávesnice a přepne myš, dokud je ještě dostupná na tomto PC
+4. Obě zařízení skončí na stejném hostu
 
 Využívá HID++ 2.0 protokol (feature CHANGE_HOST `0x1814`). Jeden Python soubor, žádné externí závislosti kromě hidapi.
 
@@ -280,6 +282,8 @@ Využívá HID++ 2.0 protokol (feature CHANGE_HOST `0x1814`). Jeden Python soubo
 |----------|-----|-----------|
 | MX Keys S + MX Vertical | macOS (Sequoia) | Bluetooth |
 | MX Keys S + MX Vertical | Windows 11 | Bluetooth |
+| MX Mechanical + MX Master 3S | macOS (Sequoia) | Bluetooth |
+| MX Mechanical + MX Master 3S | Windows 11 | Bluetooth |
 
 Mělo by fungovat s libovolnou kombinací Logitech zařízení s HID++ 2.0 a CHANGE_HOST.
 
